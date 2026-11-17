@@ -4,68 +4,133 @@
 #include <vector>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <thread>
+#include <dlfcn.h>
 
-bool runProcess(const std::string& path, const std::vector<int>& args) {
-    if (access(path.c_str(), X_OK) != 0) {
-        std::cerr << "Ошибка: Исполняемый файл не найден или нет прав на запуск: " << path << "\n";
+typedef double (*FindAverageFunc)(const std::vector<int>&);
+
+std::ofstream fout("/Users/h/oc_lab_2/oc_lab_2/average.txt");
+
+bool runThreadParallel(void(*func)(const std::vector<int>&), const std::vector<int>& args, std::vector<std::thread>& thread_pool) {
+    try {
+        thread_pool.emplace_back(func, args);
+        return true;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Ошибка при создании потока: " << e.what() << "\n";
         return false;
-    }
-    
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        std::cerr << "Ошибка при вызове fork()\n";
-        return false;
-    }
-    
-    else if (pid == 0) {
-        std::vector<std::string> string_args;
-                string_args.reserve(args.size());
-                for (const auto& arg : args) {
-                    string_args.push_back(std::to_string(arg));
-                }
-        
-        std::vector<char*> c_args;
-        c_args.push_back(const_cast<char*>(path.c_str()));
-        for (const auto& arg : string_args) {
-            c_args.push_back(const_cast<char*>(arg.c_str()));
-        }
-        c_args.push_back(nullptr);
-
-        execv(path.c_str(), c_args.data());
-        
-        std::cerr << "Ошибка при выполнении execv для " << path << "\n";
-        exit(1);
-    }
-    else {
-        int status;
-        waitpid(pid, &status, 0);
-        
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-            return true;
-        } else {
-            std::cerr << "Дочерний процесс " << path << " завершился с ошибкой.\n";
-            return false;
-        }
     }
 }
 
+void min_max(const std::vector<int>& vec){
+    if (vec.empty()) return ;
+    int x_min = vec[0], x_max = vec[0];
+    for (const auto& a : vec) {
+        if (x_min > a) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(7));
+            x_min = a;
+        }
+    }
+    for (const auto& a : vec) {
+        if (x_max < a) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(7));
+            x_max = a;
+        }
+    }
+    
+    std::cout << "Min: " << x_min << " " << "Max: " << x_max << '\n';
+    
+    fout << x_min << ' ' << x_max << ' ';
+}
+
+void average(const std::vector<int>& vec){
+    double aver = 0.0;
+    
+    void* handle = dlopen("/Users/h/oc_lab_2/oc_lab_2/libaverege.dylib", RTLD_LAZY);
+    if (!handle) {
+        std::cerr << "[Average Process] Ошибка dlopen: " << dlerror() << "\n";
+        return ;
+    }
+    
+    FindAverageFunc find_average = (FindAverageFunc)dlsym(handle, "find_average");
+    const char* dlsym_error = dlerror();
+    if (dlsym_error) {
+        std::cerr << "[Average Process] Ошибка dlsym: " << dlsym_error << "\n";
+        dlclose(handle);
+        return ;
+    }
+    
+    aver = find_average(vec);
+    
+    dlclose(handle);
+    
+    std::cout << "Average: " << aver << '\n';
+    
+    fout << aver;
+}
+
+void func(std::vector<int>& arr, const std::vector<double>& temp){
+    if (temp.size() < 3) return;
+    
+    int aver = static_cast<int>(temp[2] + 0.5);
+    int x_min = static_cast<int>(temp[0]);
+    int x_max = static_cast<int>(temp[1]);
+    
+    long long i_min = -1, i_max = -1;
+    size_t size = arr.size();
+    
+    for(size_t i = 0; i < size; ++i){
+        if(x_min == arr[i]){
+            i_min = i;
+        }
+        if(x_max == arr[i]){
+            i_max = i;
+        }
+    }
+    
+    if (i_min != -1) arr[i_min] = aver;
+    if (i_max != -1) arr[i_max] = aver;
+}
+
 int main() {
+    std::vector<std::thread> storage;
     std::vector<int> vec;
     int n{};
     int x{};
     std::cout << "Output amount: ";
     std::cin >> n; std::cout << std::endl;
     std::cout << "Input elements: " << std::endl;
-    for(size_t i{}; i < n; ++i){
+    for(size_t i = 0; i < n; ++i){
         std::cout << "Input " << i+1 << " element: ";
         std::cin >> x; std::cout << std::endl;
         vec.push_back(x);
     }
-    std::cout << "Running min_max...\n";
-    runProcess("./min_max", vec);
-    std::cout << "Running average...\n";
-    runProcess("./average", vec);
+    
+    runThreadParallel(min_max, vec, storage);
+    runThreadParallel(average, vec, storage);
+    
+    for (auto& th : storage) {
+        if (th.joinable()) {
+            th.join();
+        }
+    }
+    
+    fout.close();
+    
+    std::ifstream fin("/Users/h/oc_lab_2/oc_lab_2/average.txt");
+    std::vector<double> temp;
+    double value;
+    for(size_t i = 0; i < 3; ++i){
+        fin >> value;
+        temp.push_back(value);
+    }
+    
+    func(vec,temp);
+    
+    std::cout << "Changed array: " << "\n";
+    for(const auto& x: vec){
+        std::cout << x << " ";
+    }
     
     return 0;
 }
